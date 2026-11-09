@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Arishi 3D Avatar</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 40%, #2A1647 0%, #130B24 70%, #0A0515 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      touch-action: none;
+    }
+    #canvas-container {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    #avatar-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    #status-badge {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(30, 16, 55, 0.7);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(216, 180, 254, 0.25);
+      border-radius: 20px;
+      padding: 6px 16px;
+      font-size: 13px;
+      color: #F8FAFC;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      pointer-events: none;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10B981;
+      box-shadow: 0 0 8px #10B981;
+      transition: all 0.3s ease;
+    }
+    .status-dot.listening { background: #38BDF8; box-shadow: 0 0 10px #38BDF8; animation: pulse 1.2s infinite; }
+    .status-dot.thinking { background: #FBBF24; box-shadow: 0 0 10px #FBBF24; animation: pulse 0.8s infinite; }
+    .status-dot.speaking { background: #F43F5E; box-shadow: 0 0 12px #F43F5E; animation: pulse 0.6s infinite; }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.35); opacity: 0.7; }
+    }
+    #loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #160D27;
+      color: #D8B4FE;
+      gap: 12px;
+      transition: opacity 0.5s ease;
+      z-index: 10;
+    }
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(216, 180, 254, 0.2);
+      border-top-color: #F43F5E;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+  <!-- Load Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <div id="canvas-container">
+    <canvas id="avatar-canvas"></canvas>
+  </div>
+  <div id="status-badge">
+    <span class="status-dot" id="badge-dot"></span>
+    <span id="badge-text">Arishi is smiling</span>
+  </div>
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <div style="font-weight: 500; font-size: 14px; letter-spacing: 0.5px;">Waking up Arishi...</div>
+  </div>
+
+  <script>
+    let scene, camera, renderer;
+    let avatarGroup, headGroup, neckGroup, hairGroup, bodyGroup;
+    let leftEye, rightEye, leftPupil, rightPupil;
+    let upperLidL, lowerLidL, upperLidR, lowerLidR;
+    let mouthMesh, mouthMtl, mouthInner;
+    let blushL, blushR;
+    let particles;
+
+    let currentState = "idle"; // "idle", "listening", "thinking", "speaking"
+    let currentEmotion = "happy"; // "happy", "shy", "affectionate", "playful", "supportive"
+    let targetAmplitude = 0;
+    let currentAmplitude = 0;
+    let blinkTimer = 0;
+    let isBlinking = false;
+    let blinkProgress = 0;
+    let clock = new THREE.Clock();
+
+    let targetRotY = 0;
+    let targetRotX = 0;
+    let currentRotY = 0;
+    let currentRotX = 0;
+    let isDragging = false;
+    let prevMouseX = 0, prevMouseY = 0;
+
+    function init() {
+      const canvas = document.getElementById('avatar-canvas');
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      // 1. Scene
+      scene = new THREE.Scene();
+      scene.fog = new THREE.FogExp2(0x130B24, 0.08);
+
+      // 2. Camera
+      camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 100);
+      camera.position.set(0, 0.25, 2.2);
+
+      // 3. Renderer
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+      renderer.setSize(width, height);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.15;
+
+      // 4. Lights
+      setupLights();
+
+      // 5. Build 3D Arishi Character
+      buildArishiAvatar();
+
+      // 6. Background ambience particles
+      createParticleGlow();
+
+      // 7. Event listeners
+      setupInteraction();
+
+      // 8. Start loop
+      setTimeout(() => {
+        const loading = document.getElementById('loading-overlay');
+        if (loading) {
+          loading.style.opacity = '0';
+          setTimeout(() => loading.style.display = 'none', 500);
+        }
+        if (window.AndroidAvatarBridge && window.AndroidAvatarBridge.onAvatarReady) {
+          window.AndroidAvatarBridge.onAvatarReady();
+        }
+      }, 600);
+
+      animate();
+    }
+
+    function setupLights() {
+      const ambient = new THREE.AmbientLight(0x7C3AED, 0.85);
+      scene.add(ambient);
+
+      // Warm key light on face
+      const keyLight = new THREE.DirectionalLight(0xFFE4D6, 1.4);
+      keyLight.position.set(0.8, 1.5, 1.8);
+      scene.add(keyLight);
+
+      // Pink rim light on hair/shoulder
+      const rimLight1 = new THREE.DirectionalLight(0xF43F5E, 1.8);
+      rimLight1.position.set(-1.4, 0.8, -0.8);
+      scene.add(rimLight1);
+
+      // Lavender rim light from right
+      const rimLight2 = new THREE.DirectionalLight(0xA855F7, 1.2);
+      rimLight2.position.set(1.4, 0.5, -0.6);
+      scene.add(rimLight2);
+
+      // Subtle fill from bottom (neon chest glow)
+      const fillLight = new THREE.PointLight(0xEC4899, 0.6, 5);
+      fillLight.position.set(0, -0.6, 1.0);
+      scene.add(fillLight);
+    }
+
+    function buildArishiAvatar() {
+      avatarGroup = new THREE.Group();
+      scene.add(avatarGroup);
+
+      // Materials with natural Indian warm tone shading
+      const skinMtl = new THREE.MeshStandardMaterial({
+        color: 0xBD8264, // Warm glowing wheatish complexion
+        roughness: 0.45,
+        metalness: 0.05,
+        bumpScale: 0.02
+      });
+
+      const hairMtl = new THREE.MeshStandardMaterial({
+        color: 0x120E18, // Rich deep lustrous black
+        roughness: 0.35,
+        metalness: 0.25
+      });
+
+      const lipsMtl = new THREE.MeshStandardMaterial({
+        color: 0xD94A6E, // Soft berry pink gloss
+        roughness: 0.2,
+        metalness: 0.1
+      });
+      mouthMtl = lipsMtl;
+
+      const dressMtl = new THREE.MeshStandardMaterial({
+        color: 0x4A1E6D, // Modern royal lavender silk
+        roughness: 0.4,
+        metalness: 0.35
+      });
+
+      const goldMtl = new THREE.MeshStandardMaterial({
+        color: 0xFBBF24,
+        roughness: 0.25,
+        metalness: 0.8
+      });
+
+      // --- Body / Shoulders ---
+      bodyGroup = new THREE.Group();
+      avatarGroup.add(bodyGroup);
+
+      // Torso / Shoulders
+      const chestGeo = new THREE.CylinderGeometry(0.38, 0.48, 0.65, 32);
+      const chest = new THREE.Mesh(chestGeo, dressMtl);
+      chest.position.y = -0.58;
+      bodyGroup.add(chest);
+
+      // Gold necklace collar
+      const necklaceGeo = new THREE.TorusGeometry(0.24, 0.02, 16, 40);
+      necklaceGeo.rotateX(Math.PI / 2);
+      const necklace = new THREE.Mesh(necklaceGeo, goldMtl);
+      necklace.position.set(0, -0.28, 0.02);
+      bodyGroup.add(necklace);
+
+      // Tiny teardrop pendant
+      const pendantGeo = new THREE.ConeGeometry(0.035, 0.07, 16);
+      pendantGeo.rotateX(Math.PI);
+      const pendant = new THREE.Mesh(pendantGeo, goldMtl);
+      pendant.position.set(0, -0.34, 0.22);
+      bodyGroup.add(pendant);
+
+      // --- Neck ---
+      neckGroup = new THREE.Group();
+      neckGroup.position.set(0, -0.16, 0);
+      avatarGroup.add(neckGroup);
+
+      const neckGeo = new THREE.CylinderGeometry(0.12, 0.15, 0.28, 24);
+      const neck = new THREE.Mesh(neckGeo, skinMtl);
+      neckGroup.add(neck);
+
+      // --- Head ---
+      headGroup = new THREE.Group();
+      headGroup.position.set(0, 0.12, 0);
+      avatarGroup.add(headGroup);
+
+      // Face & skull base (soft feminine jawline)
+      const headGeo = new THREE.SphereGeometry(0.32, 32, 32);
+      headGeo.scale(0.88, 1.08, 0.95);
+      const head = new THREE.Mesh(headGeo, skinMtl);
+      headGroup.add(head);
+
+      // Chin taper
+      const chinGeo = new THREE.SphereGeometry(0.13, 24, 24);
+      chinGeo.scale(0.9, 1.1, 0.9);
+      const chin = new THREE.Mesh(chinGeo, skinMtl);
+      chin.position.set(0, -0.26, 0.13);
+      headGroup.add(chin);
+
+      // Nose
+      const noseGeo = new THREE.ConeGeometry(0.042, 0.13, 16);
+      noseGeo.rotateX(-0.15);
+      const nose = new THREE.Mesh(noseGeo, skinMtl);
+      nose.position.set(0, -0.04, 0.32);
+      headGroup.add(nose);
+
+      // Tiny nose stud (nath piece in gold)
+      const studGeo = new THREE.SphereGeometry(0.012, 12, 12);
+      const stud = new THREE.Mesh(studGeo, goldMtl);
+      stud.position.set(0.042, -0.07, 0.315);
+      headGroup.add(stud);
+
+      // Cheek blush
+      const blushMtl = new THREE.MeshBasicMaterial({
+        color: 0xF43F5E,
+        transparent: true,
+        opacity: 0.28
+      });
+      const blushGeo = new THREE.CircleGeometry(0.065, 20);
+      blushL = new THREE.Mesh(blushGeo, blushMtl);
+      blushL.position.set(-0.17, -0.07, 0.27);
+      blushL.rotation.y = -0.4;
+      headGroup.add(blushL);
+
+      blushR = new THREE.Mesh(blushGeo, blushMtl);
+      blushR.position.set(0.17, -0.07, 0.27);
+      blushR.rotation.y = 0.4;
+      headGroup.add(blushR);
+
+      // --- Eyes ---
+      const eyeWhiteMtl = new THREE.MeshBasicMaterial({ color: 0xF5F7FA });
+      const eyeIrisMtl = new THREE.MeshStandardMaterial({ color: 0x452311, roughness: 0.2 }); // Deep almond brown
+      const eyePupilMtl = new THREE.MeshBasicMaterial({ color: 0x050508 });
+      const specularMtl = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
+
+      function createEye(isRight) {
+        const eyeGroup = new THREE.Group();
+        const eyeBase = new THREE.Mesh(new THREE.SphereGeometry(0.065, 20, 20), eyeWhiteMtl);
+        eyeBase.scale.set(1.2, 0.9, 0.85);
+        eyeGroup.add(eyeBase);
+
+        // Iris
+        const iris = new THREE.Mesh(new THREE.SphereGeometry(0.042, 16, 16), eyeIrisMtl);
+        iris.position.set(0, 0, 0.038);
+        eyeGroup.add(iris);
+
+        // Pupil
+        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.024, 16, 16), eyePupilMtl);
+        pupil.position.set(0, 0, 0.054);
+        eyeGroup.add(pupil);
+
+        // Specular eye catchlight sparkle
+        const glint = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 8), specularMtl);
+        glint.position.set(0.014, 0.015, 0.065);
+        eyeGroup.add(glint);
+
+        // Upper eyeliner / lashes
+        const lashGeo = new THREE.TorusGeometry(0.068, 0.009, 8, 24, Math.PI * 0.7);
+        lashGeo.rotateZ(isRight ? -0.3 : 0.3);
+        const lash = new THREE.Mesh(lashGeo, new THREE.MeshBasicMaterial({ color: 0x0B0810 }));
+        lash.position.set(0, 0.02, 0.04);
+        eyeGroup.add(lash);
+
+        // Upper eyelid for blinking
+        const lidGeo = new THREE.SphereGeometry(0.068, 18, 18, 0, Math.PI * 2, 0, Math.PI * 0.5);
+        const upperLid = new THREE.Mesh(lidGeo, skinMtl);
+        upperLid.position.set(0, 0.01, 0.01);
+        upperLid.rotation.x = -Math.PI * 0.45;
+        eyeGroup.add(upperLid);
+
+        return { group: eyeGroup, upperLid: upperLid, pupil: pupil };
+      }
+
+      const leftEyeObj = createEye(false);
+      leftEye = leftEyeObj.group;
+      upperLidL = leftEyeObj.upperLid;
+      leftPupil = leftEyeObj.pupil;
+      leftEye.position.set(-0.115, 0.06, 0.26);
+      headGroup.add(leftEye);
+
+      const rightEyeObj = createEye(true);
+      rightEye = rightEyeObj.group;
+      upperLidR = rightEyeObj.upperLid;
+      rightPupil = rightEyeObj.pupil;
+      rightEye.position.set(0.115, 0.06, 0.26);
+      headGroup.add(rightEye);
+
+      // Delicate dark arched eyebrows
+      const browMtl = new THREE.MeshBasicMaterial({ color: 0x1A1422 });
+      const browGeo = new THREE.CylinderGeometry(0.008, 0.005, 0.12, 12);
+      browGeo.rotateZ(Math.PI / 2);
+
+      const browL = new THREE.Mesh(browGeo, browMtl);
+      browL.position.set(-0.115, 0.145, 0.28);
+      browL.rotation.z = 0.15;
+      browL.rotation.y = 0.25;
+      headGroup.add(browL);
+
+      const browR = new THREE.Mesh(browGeo, browMtl);
+      browR.position.set(0.115, 0.145, 0.28);
+      browR.rotation.z = -0.15;
+      browR.rotation.y = -0.25;
+      headGroup.add(browR);
+
+      // Traditional subtle bindi (maroon crystal)
+      const bindiGeo = new THREE.SphereGeometry(0.012, 14, 14);
+      const bindiMtl = new THREE.MeshStandardMaterial({ color: 0x881337, roughness: 0.1, metalness: 0.3 });
+      const bindi = new THREE.Mesh(bindiGeo, bindiMtl);
+      bindi.position.set(0, 0.125, 0.31);
+      headGroup.add(bindi);
+
+      // --- Mouth & Lip Rigging ---
+      const mouthGroup = new THREE.Group();
+      mouthGroup.position.set(0, -0.165, 0.275);
+      headGroup.add(mouthGroup);
+
+      // Upper lip
+      const upperLipGeo = new THREE.CylinderGeometry(0.016, 0.014, 0.125, 16);
+      upperLipGeo.rotateZ(Math.PI / 2);
+      const upperLip = new THREE.Mesh(upperLipGeo, lipsMtl);
+      upperLip.position.set(0, 0.015, 0.01);
+      mouthGroup.add(upperLip);
+
+      // Lower lip (fuller, glossy)
+      const lowerLipGeo = new THREE.CylinderGeometry(0.02, 0.016, 0.12, 16);
+      lowerLipGeo.rotateZ(Math.PI / 2);
+      mouthMesh = new THREE.Mesh(lowerLipGeo, lipsMtl);
+      mouthMesh.position.set(0, -0.012, 0.008);
+      mouthGroup.add(mouthMesh);
+
+      // Mouth cavity interior (dark background when mouth opens)
+      const innerGeo = new THREE.PlaneGeometry(0.09, 0.04);
+      mouthInner = new THREE.Mesh(innerGeo, new THREE.MeshBasicMaterial({ color: 0x2A0815 }));
+      mouthInner.position.set(0, 0, -0.005);
+      mouthGroup.add(mouthInner);
+
+      // --- Hair ---
+      hairGroup = new THREE.Group();
+      headGroup.add(hairGroup);
+
+      // Top hair volume
+      const hairTopGeo = new THREE.SphereGeometry(0.35, 24, 24, 0, Math.PI * 2, 0, Math.PI * 0.65);
+      hairTopGeo.scale(0.95, 1.15, 1.05);
+      const hairTop = new THREE.Mesh(hairTopGeo, hairMtl);
+      hairTop.position.set(0, 0.05, -0.02);
+      hairGroup.add(hairTop);
+
+      // Front parted bangs (framing her face gracefully)
+      const bangL = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.45, 16), hairMtl);
+      bangL.position.set(-0.24, -0.05, 0.16);
+      bangL.rotation.z = 0.25;
+      bangL.rotation.y = 0.3;
+      hairGroup.add(bangL);
+
+      const bangR = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.45, 16), hairMtl);
+      bangR.position.set(0.24, -0.05, 0.16);
+      bangR.rotation.z = -0.25;
+      bangR.rotation.y = -0.3;
+      hairGroup.add(bangR);
+
+      // Long cascading strands flowing over shoulders
+      for (let i = 0; i < 7; i++) {
+        const angle = (i / 6) * Math.PI - Math.PI / 2;
+        const strandGeo = new THREE.CylinderGeometry(0.06, 0.09, 0.95, 12);
+        const strand = new THREE.Mesh(strandGeo, hairMtl);
+        strand.position.set(Math.sin(angle) * 0.32, -0.4, Math.cos(angle) * 0.25 - 0.12);
+        strand.rotation.x = 0.15;
+        strand.rotation.z = Math.sin(angle) * 0.25;
+        hairGroup.add(strand);
+      }
+
+      // Traditional Indian Jhumka earrings
+      function createJhumka(isRight) {
+        const jhumka = new THREE.Group();
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.007, 12, 20), goldMtl);
+        jhumka.add(ring);
+
+        const bell = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.055, 16), goldMtl);
+        bell.position.set(0, -0.055, 0);
+        bell.rotation.x = Math.PI;
+        jhumka.add(bell);
+
+        const bead = new THREE.Mesh(new THREE.SphereGeometry(0.015, 10, 10), new THREE.MeshStandardMaterial({ color: 0xF43F5E, roughness: 0.2 }));
+        bead.position.set(0, -0.095, 0);
+        jhumka.add(bead);
+
+        jhumka.position.set(isRight ? 0.32 : -0.32, -0.04, 0.03);
+        return jhumka;
+      }
+
+      headGroup.add(createJhumka(false));
+      headGroup.add(createJhumka(true));
+    }
+
+    function createParticleGlow() {
+      const count = 75;
+      const geo = new THREE.BufferGeometry();
+      const positions = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+
+      for (let i = 0; i < count * 3; i += 3) {
+        positions[i] = (Math.random() - 0.5) * 4.5;
+        positions[i + 1] = (Math.random() - 0.5) * 3.5;
+        positions[i + 2] = (Math.random() - 0.5) * 3.0;
+
+        // Magenta & lavender sparkles
+        colors[i] = 0.8 + Math.random() * 0.2;
+        colors[i + 1] = 0.3 + Math.random() * 0.5;
+        colors[i + 2] = 0.95;
+      }
+
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      const pMtl = new THREE.PointsMaterial({
+        size: 0.04,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.65,
+        blending: THREE.AdditiveBlending
+      });
+
+      particles = new THREE.Points(geo, pMtl);
+      scene.add(particles);
+    }
+
+    function setupInteraction() {
+      const canvas = document.getElementById('avatar-canvas');
+
+      function onPointerDown(x, y) {
+        isDragging = true;
+        prevMouseX = x;
+        prevMouseY = y;
+      }
+
+      function onPointerMove(x, y) {
+        const normX = (x / window.innerWidth) * 2 - 1;
+        const normY = -(y / window.innerHeight) * 2 + 1;
+
+        // Eye tracking
+        if (leftPupil && rightPupil) {
+          leftPupil.position.x = normX * 0.015;
+          leftPupil.position.y = normY * 0.012;
+          rightPupil.position.x = normX * 0.015;
+          rightPupil.position.y = normY * 0.012;
+        }
+
+        if (isDragging) {
+          const deltaX = x - prevMouseX;
+          const deltaY = y - prevMouseY;
+          targetRotY += deltaX * 0.005;
+          targetRotX += deltaY * 0.004;
+
+          // Clamping rotation angles
+          targetRotY = Math.max(-0.65, Math.min(0.65, targetRotY));
+          targetRotX = Math.max(-0.35, Math.min(0.35, targetRotX));
+
+          prevMouseX = x;
+          prevMouseY = y;
+        }
+      }
+
+      function onPointerUp() {
+        isDragging = false;
+      }
+
+      canvas.addEventListener('mousedown', e => onPointerDown(e.clientX, e.clientY));
+      window.addEventListener('mousemove', e => onPointerMove(e.clientX, e.clientY));
+      window.addEventListener('mouseup', onPointerUp);
+
+      canvas.addEventListener('touchstart', e => {
+        if (e.touches.length > 0) onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+      }, { passive: true });
+
+      window.addEventListener('touchmove', e => {
+        if (e.touches.length > 0) onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+      }, { passive: true });
+
+      window.addEventListener('touchend', onPointerUp);
+
+      window.addEventListener('resize', () => {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+      });
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = clock.getDelta();
+      const elapsed = clock.getElapsedTime();
+
+      // 1. Natural Breathing & Micro-movement
+      if (bodyGroup) {
+        bodyGroup.position.y = Math.sin(elapsed * 1.8) * 0.012;
+      }
+
+      // 2. Head idle sway & state-dependent pose
+      let stateTiltZ = 0;
+      let stateTiltX = 0;
+      let stateTiltY = 0;
+
+      if (currentState === "listening") {
+        stateTiltZ = 0.08; // Curious affectionate head tilt
+        stateTiltX = 0.04;
+      } else if (currentState === "thinking") {
+        stateTiltZ = -0.06;
+        stateTiltX = -0.09; // Contemplative upward gaze
+      } else if (currentState === "speaking") {
+        stateTiltX = Math.sin(elapsed * 5.0) * 0.025; // Gentle rhythmic speaking nod
+        stateTiltY = Math.cos(elapsed * 2.5) * 0.03;
+      }
+
+      // Spring towards target orientation smoothly
+      if (!isDragging) {
+        targetRotY += (0 - targetRotY) * 0.04;
+        targetRotX += (0 - targetRotX) * 0.04;
+      }
+      currentRotY += (targetRotY - currentRotY) * 0.12;
+      currentRotX += (targetRotX - currentRotX) * 0.12;
+
+      if (headGroup) {
+        headGroup.rotation.y = currentRotY + stateTiltY + Math.sin(elapsed * 0.8) * 0.03;
+        headGroup.rotation.x = currentRotX + stateTiltX + Math.sin(elapsed * 1.8) * 0.015;
+        headGroup.rotation.z = stateTiltZ + Math.cos(elapsed * 0.7) * 0.015;
+      }
+
+      // 3. Natural Blinking
+      blinkTimer += delta;
+      if (!isBlinking && blinkTimer > 3.2 + Math.random() * 2.0) {
+        isBlinking = true;
+        blinkProgress = 0;
+        blinkTimer = 0;
+      }
+
+      if (isBlinking) {
+        blinkProgress += delta * 9.0;
+        const lidAngle = Math.sin(blinkProgress * Math.PI) * 0.85;
+        if (upperLidL && upperLidR) {
+          upperLidL.rotation.x = -Math.PI * 0.45 + lidAngle;
+          upperLidR.rotation.x = -Math.PI * 0.45 + lidAngle;
+        }
+        if (blinkProgress >= 1.0) {
+          isBlinking = false;
+          if (upperLidL && upperLidR) {
+            upperLidL.rotation.x = -Math.PI * 0.45;
+            upperLidR.rotation.x = -Math.PI * 0.45;
+          }
+        }
+      }
+
+      // 4. Lip Sync & Talking Amplitude
+      currentAmplitude += (targetAmplitude - currentAmplitude) * 0.35;
+      if (currentState === "speaking") {
+        // Continuous modulation on top of audio amplitude
+        const voiceMod = Math.abs(Math.sin(elapsed * 14.0)) * 0.4;
+        const totalAmp = Math.max(currentAmplitude, voiceMod * (currentAmplitude > 0.05 ? 1 : 0.4));
+        if (mouthMesh) {
+          mouthMesh.position.y = -0.012 - (totalAmp * 0.035);
+          mouthMesh.scale.x = 1.0 - (totalAmp * 0.2);
+        }
+        if (mouthInner) {
+          mouthInner.scale.y = 0.2 + (totalAmp * 2.4);
+        }
+      } else {
+        if (mouthMesh) {
+          mouthMesh.position.y += (-0.012 - mouthMesh.position.y) * 0.2;
+          mouthMesh.scale.x += (1.0 - mouthMesh.scale.x) * 0.2;
+        }
+        if (mouthInner) {
+          mouthInner.scale.y += (0.1 - mouthInner.scale.y) * 0.2;
+        }
+      }
+
+      // 5. Emotion blush update
+      if (blushL && blushR) {
+        const targetBlush = (currentEmotion === "shy" || currentEmotion === "romantic") ? 0.45 : 0.28;
+        blushL.material.opacity += (targetBlush - blushL.material.opacity) * 0.08;
+        blushR.material.opacity = blushL.material.opacity;
+      }
+
+      // 6. Slow particle drift
+      if (particles) {
+        particles.rotation.y = elapsed * 0.04;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    // Public API for Android Bridge / WebView integration
+    window.setAvatarState = function(state) {
+      currentState = state || "idle";
+      const dot = document.getElementById('badge-dot');
+      const text = document.getElementById('badge-text');
+
+      dot.className = "status-dot " + currentState;
+      if (currentState === "listening") {
+        text.innerText = "Arishi is listening...";
+        targetAmplitude = 0;
+      } else if (currentState === "thinking") {
+        text.innerText = "Arishi is thinking...";
+        targetAmplitude = 0;
+      } else if (currentState === "speaking") {
+        text.innerText = "Arishi is speaking ❤️";
+      } else {
+        text.innerText = "Arishi is here with you";
+        targetAmplitude = 0;
+      }
+    };
+
+    window.setAudioAmplitude = function(amp) {
+      targetAmplitude = Math.max(0, Math.min(1, parseFloat(amp) || 0));
+    };
+
+    window.setEmotion = function(emotion) {
+      currentEmotion = emotion || "happy";
+    };
+
+    window.setBackgroundTheme = function(themeId) {
+      const body = document.body;
+      if (themeId === "neon") {
+        body.style.background = "radial-gradient(circle at 50% 40%, #3B0764 0%, #1E0836 60%, #0D0219 100%)";
+      } else if (themeId === "cozy") {
+        body.style.background = "radial-gradient(circle at 50% 40%, #451A03 0%, #1C0A00 70%, #0A0400 100%)";
+      } else if (themeId === "starry") {
+        body.style.background = "radial-gradient(circle at 50% 40%, #1E1B4B 0%, #0F0E2A 70%, #050414 100%)";
+      } else {
+        body.style.background = "radial-gradient(circle at 50% 40%, #2A1647 0%, #130B24 70%, #0A0515 100%)";
+      }
+    };
+
+    window.setLowQualityMode = function(isLow) {
+      if (renderer) {
+        renderer.setPixelRatio(isLow ? 1.0 : Math.min(window.devicePixelRatio, 2));
+      }
+    };
+
+    // Auto initialize on load
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>

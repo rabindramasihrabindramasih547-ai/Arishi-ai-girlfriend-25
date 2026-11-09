@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile, companion settings, and preferences",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Google Auth UID" },
+        "displayName": { "type": "string", "description": "User's preferred name" },
+        "preferredLanguage": { "type": "string", "description": "Language code or auto" },
+        "currentMode": { "type": "string", "description": "Active girlfriend mode: normal, romantic, cute, emotional, fun, learning, story" },
+        "voiceName": { "type": "string", "description": "Preferred voice identifier" },
+        "voiceSpeed": { "type": "number", "description": "Speech speed multiplier" },
+        "voiceVolume": { "type": "number", "description": "Voice volume level" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp via serverTimestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp via serverTimestamp" }
+      },
+      "required": ["userId", "displayName", "createdAt"]
+    },
+    "MemoryItem": {
+      "title": "MemoryItem",
+      "description": "User-approved long-term memory for Arishi",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "category": { "type": "string", "enum": ["activity", "date", "fact", "topic", "preference"], "description": "Memory category" },
+        "key": { "type": "string", "description": "Memory topic or key descriptor" },
+        "value": { "type": "string", "description": "Learned memory value" },
+        "isApproved": { "type": "boolean", "description": "Whether user approved this memory" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["userId", "category", "key", "value", "isApproved", "createdAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Chat and transcribed voice message history",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "sender": { "type": "string", "enum": ["user", "arishi"], "description": "Message sender" },
+        "text": { "type": "string", "description": "Message transcript or text content" },
+        "mode": { "type": "string", "description": "Companion mode at time of message" },
+        "language": { "type": "string", "description": "Detected or configured language" },
+        "isVoice": { "type": "boolean", "description": "Whether the message was voice-based" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Message creation timestamp" }
+      },
+      "required": ["userId", "sender", "text", "mode", "isVoice", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile and companion preferences"
+    },
+    "/users/{userId}/memories/{memoryId}": {
+      "schema": "MemoryItem",
+      "description": "Long-term memories retained by Arishi"
+    },
+    "/users/{userId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Chronological conversation history"
+    }
+  }
+}

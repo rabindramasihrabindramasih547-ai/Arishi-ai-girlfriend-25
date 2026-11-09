@@ -1,0 +1,6 @@
+{
+  "name": "Arishi AI",
+  "description": "Your Voice. Your Companion. Your Arishi. Real-time voice AI companion with 3D avatar.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

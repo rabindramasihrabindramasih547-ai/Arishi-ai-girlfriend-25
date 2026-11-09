@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId == request.auth.uid &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 60 &&
+             (!('preferredLanguage' in data) || (data.preferredLanguage is string && data.preferredLanguage.size() <= 20)) &&
+             (!('currentMode' in data) || (data.currentMode is string && data.currentMode.size() <= 30)) &&
+             (!('voiceName' in data) || (data.voiceName is string && data.voiceName.size() <= 40)) &&
+             (!('voiceSpeed' in data) || (data.voiceSpeed is number && data.voiceSpeed >= 0.5 && data.voiceSpeed <= 2.0)) &&
+             (!('voiceVolume' in data) || (data.voiceVolume is number && data.voiceVolume >= 0.0 && data.voiceVolume <= 1.0)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidMemoryItem(data) {
+      return data.userId == request.auth.uid &&
+             data.category in ['activity', 'date', 'fact', 'topic', 'preference'] &&
+             data.key is string && data.key.size() > 0 && data.key.size() <= 100 &&
+             data.value is string && data.value.size() > 0 && data.value.size() <= 500 &&
+             data.isApproved is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidChatMessage(data) {
+      return data.userId == request.auth.uid &&
+             data.sender in ['user', 'arishi'] &&
+             data.text is string && data.text.size() > 0 && data.text.size() <= 5000 &&
+             data.mode is string && data.mode.size() <= 30 &&
+             (!('language' in data) || (data.language is string && data.language.size() <= 20)) &&
+             data.isVoice is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'preferredLanguage', 'currentMode', 'voiceName', 'voiceSpeed', 'voiceVolume', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredLanguage', 'currentMode', 'voiceName', 'voiceSpeed', 'voiceVolume', 'updatedAt']);
+
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+
+      match /memories/{memoryId} {
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(memoryId) &&
+                         incoming().userId == request.auth.uid &&
+                         incoming().keys().hasAll(['userId', 'category', 'key', 'value', 'isApproved', 'createdAt']) &&
+                         incoming().keys().hasOnly(['userId', 'category', 'key', 'value', 'isApproved', 'createdAt', 'updatedAt']) &&
+                         isValidMemoryItem(incoming());
+
+        allow update: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(memoryId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidMemoryItem(incoming()) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['category', 'key', 'value', 'isApproved', 'updatedAt']);
+
+        allow delete: if isSignedIn() && request.auth.uid == userId && isValidId(memoryId);
+      }
+
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(messageId) &&
+                         incoming().userId == request.auth.uid &&
+                         incoming().keys().hasAll(['userId', 'sender', 'text', 'mode', 'isVoice', 'createdAt']) &&
+                         incoming().keys().hasOnly(['userId', 'sender', 'text', 'mode', 'language', 'isVoice', 'createdAt']) &&
+                         isValidChatMessage(incoming());
+
+        allow delete: if isSignedIn() && request.auth.uid == userId && isValidId(messageId);
+      }
+    }
+  }
+}
